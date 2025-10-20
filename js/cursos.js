@@ -5,24 +5,35 @@ import {
     collection,
     addDoc,
     getDocs,
+    getDoc,
+    setDoc,
     doc,
     updateDoc,
     deleteDoc,
     query,
     orderBy,
     where,
-    limit
+    limit,
+    onSnapshot
 } from 'https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js';
 
 class CursosManager {
     constructor() {
         this.cursos = [];
+        this.inscripcionListeners = new Map(); // Mapa de listeners activos por curso
         this.setupEventListeners();
     }
 
     // Método para contar inscriptos activos dinámicamente
     async contarInscriptosActivos(cursoId) {
         try {
+            // Verificar que Firebase esté listo
+            if (!db) {
+                console.error('❌ Firebase no inicializado para contar inscriptos');
+                return 0;
+            }
+            
+            console.log(`🔢 Contando inscriptos para curso: ${cursoId}`);
             const q = query(
                 collection(db, 'inscripciones'),
                 where('cursoId', '==', cursoId),
@@ -30,26 +41,22 @@ class CursosManager {
             );
             
             const querySnapshot = await getDocs(q);
-            return querySnapshot.size;
-        } catch (error) {
-            console.error('Error contando inscriptos activos:', error);
-            return 0;
-        }
-    }
-
-    // Método para contar inscriptos activos dinámicamente
-    async contarInscriptosActivos(cursoId) {
-        try {
-            const q = query(
-                collection(db, 'inscripciones'),
-                where('cursoId', '==', cursoId),
-                where('estado', 'in', ['pendiente', 'pagado', 'confirmado'])
-            );
+            const count = querySnapshot.size;
+            console.log(`✅ Curso ${cursoId}: ${count} inscriptos activos encontrados`);
             
-            const querySnapshot = await getDocs(q);
-            return querySnapshot.size;
+            // Debug: mostrar detalles de inscripciones
+            if (count > 0) {
+                querySnapshot.forEach(doc => {
+                    const data = doc.data();
+                    console.log(`   - ${data.usuarioNombre || 'Sin nombre'} (${data.estado})`);
+                });
+            } else {
+                console.log(`   ℹ️ No se encontraron inscripciones activas para curso ${cursoId}`);
+            }
+            
+            return count;
         } catch (error) {
-            console.error('Error contando inscriptos activos:', error);
+            console.error('❌ Error contando inscriptos activos:', error);
             return 0;
         }
     }
@@ -96,17 +103,32 @@ class CursosManager {
             this.loadCursos(true); // Forzar recarga al hacer click en el menú
             window.authManager.showSection('cursos');
         });
+
+        // Limpiar listeners cuando se cambie de sección
+        document.addEventListener('sectionChanged', (e) => {
+            if (e.detail.previousSection === 'cursos') {
+                console.log('🔌 Limpiando listeners al salir de sección cursos');
+                this.clearInscripcionListeners();
+            }
+        });
     }
 
     async loadCursos(forceReload = false) {
         try {
+            // Limpiar listeners existentes antes de recargar
+            if (forceReload) {
+                this.clearInscripcionListeners();
+            }
+            
             // Si ya hay cursos cargados y no se fuerza la recarga, solo renderizar
             if (this.cursos.length > 0 && !forceReload) {
-                this.renderCursos();
+                this.showCursosLoading();
+                await this.renderCursos();
+                this.hideCursosLoading();
                 return;
             }
             
-            window.authManager.showLoading();
+            this.showCursosLoading();
             
             const q = query(
                 collection(db, 'cursos'),
@@ -123,13 +145,13 @@ class CursosManager {
                 });
             });
             
-            this.renderCursos();
+            await this.renderCursos();
             
         } catch (error) {
             console.error('Error loading cursos:', error);
             window.authManager.showMessage('Error al cargar los cursos', 'error');
         } finally {
-            window.authManager.hideLoading();
+            this.hideCursosLoading();
         }
     }
 
@@ -165,7 +187,29 @@ class CursosManager {
             return;
         }
 
-        cursosGrid.innerHTML = await Promise.all(cursos.map(curso => this.createCursoCard(curso))).then(cards => cards.join(''));
+        // Renderizar tarjetas de forma más robusta
+        console.log(`🎯 Renderizando ${cursos.length} cursos...`);
+        console.log(`⚡ Ejecutando creación de tarjetas en PARALELO...`);
+        
+        // Ejecutar todas las creaciones de tarjetas en paralelo para mejor rendimiento
+        const cardPromises = cursos.map(async (curso) => {
+            try {
+                return await this.createCursoCard(curso);
+            } catch (error) {
+                console.error(`❌ Error al crear tarjeta para curso ${curso.nombre}:`, error);
+                // Crear una tarjeta de error como fallback
+                return `
+                    <div class="card" style="border: 2px solid red;">
+                        <h3>${curso.nombre}</h3>
+                        <p style="color: red;">Error al cargar datos del curso</p>
+                    </div>
+                `;
+            }
+        });
+        
+        const cards = await Promise.all(cardPromises);
+        
+        cursosGrid.innerHTML = cards.join('');
         
         // Agregar event listeners a los botones de inscripción
         cursosGrid.querySelectorAll('.inscribirse-btn').forEach(btn => {
@@ -174,9 +218,16 @@ class CursosManager {
                 this.inscribirseACurso(cursoId);
             });
         });
+
+        // Configurar listeners en tiempo real para inscripciones
+        this.setupInscripcionListeners();
+        
+        console.log(`✅ Renderizado completo de ${cursos.length} cursos`);
     }
 
     async createCursoCard(curso) {
+        console.log(`🃏 Creando tarjeta para curso: "${curso.nombre}" (ID: ${curso.id})`);
+        
         const fechaFormatted = new Date(curso.fechaHora.seconds * 1000).toLocaleString('es-AR', {
             weekday: 'long',
             year: 'numeric',
@@ -186,24 +237,31 @@ class CursosManager {
             minute: '2-digit'
         });
 
-        // Calcular inscriptos dinámicamente contando inscripciones activas
-        const inscriptosActuales = await this.contarInscriptosActivos(curso.id);
+        // Ejecutar consultas en paralelo para mejor rendimiento
+        const [inscriptosActuales, inscripcionInfo] = await Promise.all([
+            this.contarInscriptosActivos(curso.id),
+            window.authManager.getCurrentUser() 
+                ? this.verificarInscripcionCompleta(curso.id).catch(error => {
+                    console.log('Error verificando inscripción:', error);
+                    return { inscrito: false, estado: '' };
+                })
+                : Promise.resolve({ inscrito: false, estado: '' })
+        ]);
+        
         const disponibles = curso.capacidadMaxima - inscriptosActuales;
         const estaCompleto = disponibles <= 0;
         const yaTermino = new Date(curso.fechaHora.seconds * 1000) < new Date();
-
-        // Verificar si el usuario actual está inscrito en este curso
-        let estaInscrito = false;
-        let estadoInscripcion = '';
-        if (window.authManager.getCurrentUser()) {
-            try {
-                const inscripcionInfo = await this.verificarInscripcionCompleta(curso.id);
-                estaInscrito = inscripcionInfo.inscrito;
-                estadoInscripcion = inscripcionInfo.estado || '';
-            } catch (error) {
-                console.log('Error verificando inscripción:', error);
-            }
-        }
+        const estaInscrito = inscripcionInfo.inscrito;
+        const estadoInscripcion = inscripcionInfo.estado || '';
+        
+        console.log(`📊 Tarjeta curso "${curso.nombre}":`, {
+            inscriptosActuales: inscriptosActuales,
+            tipoInscriptos: typeof inscriptosActuales,
+            capacidadMaxima: curso.capacidadMaxima,
+            disponibles: disponibles,
+            estaCompleto: estaCompleto,
+            estaInscrito: estaInscrito
+        });
 
         return `
             <div class="card curso-card ${estaInscrito ? 'curso-card--inscrito' : ''}">
@@ -266,6 +324,245 @@ class CursosManager {
         `;
     }
 
+    // Validar que el usuario tenga teléfono registrado con manejo mejorado de permisos
+    async validarTelefono() {
+        try {
+            const userEmail = window.authManager.getCurrentUser().email;
+            
+            // Intentar verificar si el usuario ya tiene teléfono en base_inscriptos
+            try {
+                const inscriptoRef = doc(db, 'base_inscriptos', userEmail);
+                const inscriptoDoc = await getDoc(inscriptoRef);
+                
+                if (inscriptoDoc.exists()) {
+                    const inscriptoData = inscriptoDoc.data();
+                    const telefono = inscriptoData.telefono;
+                    
+                    // Validar que el teléfono existe y no es un valor placeholder
+                    if (telefono && 
+                        telefono.trim() !== '' && 
+                        telefono.toLowerCase() !== 'no disponible' &&
+                        telefono.toLowerCase() !== 'n/a' &&
+                        telefono !== '-' &&
+                        telefono !== 'null' &&
+                        telefono !== 'undefined') {
+                        console.log('✅ Usuario ya tiene teléfono registrado:', telefono);
+                        return telefono;
+                    } else if (telefono) {
+                        console.log('⚠️ Usuario tiene teléfono no válido:', telefono, '- solicitando nuevo teléfono');
+                    }
+                }
+            } catch (permissionError) {
+                if (permissionError.code === 'permission-denied') {
+                    console.log('⚠️ Sin permisos para leer base_inscriptos, solicitando teléfono directamente');
+                } else {
+                    console.log('⚠️ Error accediendo a base_inscriptos:', permissionError.message);
+                }
+                // Continuar pidiendo teléfono sin fallar
+            }
+            
+            // Si no tiene teléfono válido o no se pudo verificar, mostrar modal para pedirlo
+            console.log('📱 Solicitando teléfono al usuario...');
+            const telefono = await this.mostrarModalTelefono();
+            
+            if (telefono) {
+                // Intentar guardar teléfono en base_inscriptos (con manejo de errores)
+                await this.guardarTelefonoEnBase(userEmail, telefono);
+                return telefono;
+            }
+            
+            return null; // Usuario canceló
+            
+        } catch (error) {
+            console.error('❌ Error validando teléfono:', error);
+            return null;
+        }
+    }
+
+    // Mostrar modal para solicitar teléfono
+    async mostrarModalTelefono() {
+        return new Promise((resolve) => {
+            // Crear modal dinámicamente
+            const modalHTML = `
+                <div id="telefono-modal" class="modal-overlay" style="
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background: rgba(0,0,0,0.5);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    z-index: 10000;
+                ">
+                    <div class="modal-content" style="
+                        background: white;
+                        padding: 30px;
+                        border-radius: 10px;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                        max-width: 400px;
+                        width: 90%;
+                    ">
+                        <h3 style="margin-top: 0; color: #333; text-align: center;">
+                            📱 Necesitamos tu teléfono
+                        </h3>
+                        <p style="color: #666; text-align: center; margin-bottom: 20px;">
+                            Para completar tu inscripción, necesitamos tu número de teléfono para contactarte.
+                        </p>
+                        
+                        <div style="margin-bottom: 20px;">
+                            <label style="display: block; margin-bottom: 5px; font-weight: bold;">
+                                Número de teléfono:
+                            </label>
+                            <input 
+                                type="tel" 
+                                id="telefono-input" 
+                                placeholder="+56 9 1234 5678"
+                                style="
+                                    width: 100%;
+                                    padding: 10px;
+                                    border: 2px solid #ddd;
+                                    border-radius: 5px;
+                                    font-size: 16px;
+                                    box-sizing: border-box;
+                                "
+                            />
+                            <small style="color: #999; font-size: 12px;">
+                                Incluye código de país (ej: +56 para Chile)
+                            </small>
+                        </div>
+                        
+                        <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                            <button 
+                                id="telefono-cancelar" 
+                                style="
+                                    padding: 10px 20px;
+                                    border: 2px solid #ddd;
+                                    background: white;
+                                    border-radius: 5px;
+                                    cursor: pointer;
+                                "
+                            >
+                                Cancelar
+                            </button>
+                            <button 
+                                id="telefono-guardar" 
+                                style="
+                                    padding: 10px 20px;
+                                    border: none;
+                                    background: #007bff;
+                                    color: white;
+                                    border-radius: 5px;
+                                    cursor: pointer;
+                                "
+                            >
+                                Guardar y Continuar
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Insertar modal en el DOM
+            document.body.insertAdjacentHTML('beforeend', modalHTML);
+            
+            const modal = document.getElementById('telefono-modal');
+            const input = document.getElementById('telefono-input');
+            const cancelarBtn = document.getElementById('telefono-cancelar');
+            const guardarBtn = document.getElementById('telefono-guardar');
+            
+            // Enfocar input
+            setTimeout(() => input.focus(), 100);
+            
+            // Validación de teléfono
+            const validarTelefono = (telefono) => {
+                const regex = /^\+?[\d\s\-\(\)]{8,}$/;
+                return regex.test(telefono.trim());
+            };
+            
+            // Eventos
+            cancelarBtn.onclick = () => {
+                modal.remove();
+                resolve(null);
+            };
+            
+            guardarBtn.onclick = () => {
+                const telefono = input.value.trim();
+                if (!telefono) {
+                    alert('Por favor ingresa tu teléfono');
+                    input.focus();
+                    return;
+                }
+                
+                if (!validarTelefono(telefono)) {
+                    alert('Por favor ingresa un teléfono válido (mínimo 8 dígitos, puede incluir código de país)');
+                    input.focus();
+                    return;
+                }
+                
+                modal.remove();
+                resolve(telefono);
+            };
+            
+            // Enter para guardar
+            input.onkeypress = (e) => {
+                if (e.key === 'Enter') {
+                    guardarBtn.click();
+                }
+            };
+            
+            // Escape para cancelar
+            document.onkeydown = (e) => {
+                if (e.key === 'Escape') {
+                    cancelarBtn.click();
+                }
+            };
+        });
+    }
+
+    // Guardar teléfono en base_inscriptos con manejo mejorado de permisos
+    async guardarTelefonoEnBase(email, telefono) {
+        try {
+            const inscriptoRef = doc(db, 'base_inscriptos', email);
+            const inscriptoDoc = await getDoc(inscriptoRef);
+            
+            if (inscriptoDoc.exists()) {
+                // Actualizar registro existente
+                await updateDoc(inscriptoRef, {
+                    telefono: telefono,
+                    fechaActualizacion: new Date()
+                });
+            } else {
+                // Crear nuevo registro básico
+                const userData = window.authManager.getCurrentUser();
+                await setDoc(inscriptoRef, {
+                    email: email,
+                    nombre: userData.displayName || userData.email,
+                    telefono: telefono,
+                    totalCursos: 0,
+                    cursosConfirmados: 0,
+                    cursosDetalle: [],
+                    fechaRegistro: new Date(),
+                    fechaActualizacion: new Date(),
+                    montoTotal: 0,
+                    activo: true
+                });
+            }
+            
+            console.log('✅ Teléfono guardado en base_inscriptos:', telefono);
+            
+        } catch (error) {
+            // Manejo mejorado de errores: no fallar si no hay permisos
+            if (error.code === 'permission-denied') {
+                console.log('⚠️ Sin permisos para guardar en base_inscriptos, teléfono se guardará solo en inscripción');
+            } else {
+                console.error('❌ Error guardando teléfono:', error);
+            }
+            // No lanzar error para que el proceso de inscripción continúe
+        }
+    }
+
     async inscribirseACurso(cursoId) {
         if (!window.authManager.getCurrentUser()) {
             window.authManager.showMessage('Debes iniciar sesión para inscribirte', 'error');
@@ -273,11 +570,13 @@ class CursosManager {
             return;
         }
 
+        let curso = null; // Declarar fuera del try para que sea accesible en catch
+
         try {
             window.authManager.showLoading();
             
             // Verificar que el curso existe y tiene cupo
-            const curso = this.cursos.find(c => c.id === cursoId);
+            curso = this.cursos.find(c => c.id === cursoId);
             if (!curso) {
                 throw new Error('Curso no encontrado');
             }
@@ -294,11 +593,19 @@ class CursosManager {
                 throw new Error('Ya estás inscripto en este curso');
             }
 
+            // 🆕 VALIDAR TELÉFONO ANTES DE INSCRIBIRSE
+            const telefono = await this.validarTelefono();
+            if (!telefono) {
+                // Usuario canceló el modal o hubo error
+                throw new Error('Inscripción cancelada: teléfono requerido');
+            }
+
             // Crear la inscripción
             const inscripcionData = {
                 usuarioId: window.authManager.getCurrentUser().uid,
                 usuarioEmail: window.authManager.getCurrentUser().email,
                 usuarioNombre: window.authManager.getCurrentUser().displayName || window.authManager.getCurrentUser().email,
+                telefono: telefono, // 🆕 CAMPO TELÉFONO VALIDADO
                 cursoId: cursoId,
                 cursoNombre: curso.nombre,
                 costo: curso.costo,
@@ -309,6 +616,21 @@ class CursosManager {
             };
 
             const inscripcionRef = await addDoc(collection(db, 'inscripciones'), inscripcionData);
+
+            // Actualizar base_inscriptos con nueva inscripción
+            try {
+                if (window.baseInscriptosManager) {
+                    await window.baseInscriptosManager.actualizarInscripto(
+                        inscripcionData.usuarioEmail,
+                        { ...inscripcionData, id: inscripcionRef.id },
+                        curso
+                    );
+                    console.log('✅ Base de inscriptos actualizada con nueva inscripción');
+                }
+            } catch (baseError) {
+                console.error('⚠️ Error actualizando base_inscriptos:', baseError);
+                // No detener el proceso principal por este error
+            }
 
             // Logging de inscripción exitosa
             await systemLogger.logInscription('new_inscription', {
@@ -490,6 +812,138 @@ class CursosManager {
     // Método para obtener curso por ID (usado por otros módulos)
     getCursoById(cursoId) {
         return this.cursos.find(curso => curso.id === cursoId);
+    }
+
+    // Función de debug para probar desde consola
+    async debugContarInscriptos(cursoId) {
+        console.log('🔧 FUNCIÓN DEBUG - Contando inscriptos para:', cursoId);
+        try {
+            const result = await this.contarInscriptosActivos(cursoId);
+            console.log('🔧 RESULTADO DEBUG:', result);
+            return result;
+        } catch (error) {
+            console.error('🔧 ERROR DEBUG:', error);
+            return null;
+        }
+    }
+
+    // Función para ver todos los cursos disponibles
+    debugVerCursos() {
+        console.log('🔧 CURSOS CARGADOS:', this.cursos);
+        return this.cursos;
+    }
+
+    // Función para ver todas las inscripciones
+    async debugVerInscripciones() {
+        try {
+            console.log('🔧 OBTENIENDO TODAS LAS INSCRIPCIONES...');
+            const querySnapshot = await getDocs(collection(db, 'inscripciones'));
+            const inscripciones = [];
+            querySnapshot.forEach(doc => {
+                inscripciones.push({ id: doc.id, ...doc.data() });
+            });
+            console.log('🔧 INSCRIPCIONES ENCONTRADAS:', inscripciones);
+            return inscripciones;
+        } catch (error) {
+            console.error('🔧 ERROR AL OBTENER INSCRIPCIONES:', error);
+            return [];
+        }
+    }
+
+    // Métodos para manejar el spinner de carga de cursos
+    showCursosLoading() {
+        console.log('🔄 Mostrando spinner de carga de cursos...');
+        const cursosGrid = document.getElementById('cursos-grid');
+        const cursosLoading = document.getElementById('cursos-loading');
+        
+        if (cursosGrid) cursosGrid.style.display = 'none';
+        if (cursosLoading) cursosLoading.style.display = 'flex';
+    }
+
+    hideCursosLoading() {
+        console.log('✅ Ocultando spinner de carga de cursos');
+        const cursosGrid = document.getElementById('cursos-grid');
+        const cursosLoading = document.getElementById('cursos-loading');
+        
+        if (cursosLoading) cursosLoading.style.display = 'none';
+        if (cursosGrid) cursosGrid.style.display = 'grid';
+    }
+
+    // Configurar listeners en tiempo real para inscripciones
+    setupInscripcionListeners() {
+        // Limpiar listeners existentes
+        this.clearInscripcionListeners();
+        
+        this.cursos.forEach(curso => {
+            const q = query(
+                collection(db, 'inscripciones'),
+                where('cursoId', '==', curso.id),
+                where('estado', 'in', ['pendiente', 'pagado', 'confirmado'])
+            );
+            
+            const unsubscribe = onSnapshot(q, (snapshot) => {
+                const inscriptosActuales = snapshot.size;
+                const disponibles = curso.capacidadMaxima - inscriptosActuales;
+                const estaCompleto = disponibles <= 0;
+                
+                // Actualizar el botón específico de este curso
+                this.updateCursoButton(curso.id, estaCompleto, inscriptosActuales, disponibles);
+            }, (error) => {
+                console.error(`Error en listener de inscripciones para curso ${curso.id}:`, error);
+            });
+            
+            this.inscripcionListeners.set(curso.id, unsubscribe);
+        });
+        
+        console.log(`📡 Configurados ${this.inscripcionListeners.size} listeners de inscripciones en tiempo real`);
+    }
+
+    // Limpiar todos los listeners de inscripciones
+    clearInscripcionListeners() {
+        this.inscripcionListeners.forEach((unsubscribe, cursoId) => {
+            unsubscribe();
+            console.log(`🔌 Desconectado listener para curso ${cursoId}`);
+        });
+        this.inscripcionListeners.clear();
+    }
+
+    // Actualizar botón específico de un curso cuando cambian las inscripciones
+    updateCursoButton(cursoId, estaCompleto, inscriptosActuales, disponibles) {
+        const cursoCard = document.querySelector(`[data-curso-id="${cursoId}"]`)?.closest('.curso-card');
+        if (!cursoCard) return;
+        
+        // Actualizar contador de inscriptos
+        const contadorElement = cursoCard.querySelector('.card__info-item span');
+        if (contadorElement && contadorElement.textContent.includes('inscriptos')) {
+            const curso = this.cursos.find(c => c.id === cursoId);
+            if (curso) {
+                contadorElement.textContent = `${inscriptosActuales}/${curso.capacidadMaxima} inscriptos`;
+            }
+        }
+        
+        // Actualizar información de cupos disponibles
+        const disponiblesElement = cursoCard.querySelector('.card__info-item:last-child span');
+        if (disponiblesElement && disponiblesElement.textContent.includes('cupos')) {
+            disponiblesElement.textContent = `${disponibles} cupos disponibles`;
+        }
+        
+        // Actualizar estado del botón
+        const button = cursoCard.querySelector('.inscribirse-btn');
+        if (button) {
+            if (estaCompleto) {
+                button.disabled = true;
+                button.innerHTML = '<i class="fas fa-times"></i> Curso Completo';
+                button.classList.remove('btn--primary');
+                button.classList.add('btn--secondary');
+            } else {
+                button.disabled = false;
+                button.innerHTML = '<i class="fas fa-user-plus"></i> Inscribirse';
+                button.classList.remove('btn--secondary');
+                button.classList.add('btn--primary');
+            }
+        }
+        
+        console.log(`🔄 Actualizado botón curso ${cursoId}: ${inscriptosActuales} inscriptos, ${disponibles} disponibles`);
     }
 }
 

@@ -299,6 +299,7 @@ class ColumnManager {
         this.defaultColumns = {
             inscripto: true,
             email: true,
+            telefono: true, // 🆕 Columna teléfono
             curso: true,
             fechaCurso: true,
             fechaInscripcion: true,
@@ -603,6 +604,8 @@ class AdminManager {
                     this.loadAdministratorsTab();
                 } else if (targetTab === 'estado-cursos-admin') {
                     this.loadEstadoCursosTab();
+                } else if (targetTab === 'base-usuarios-admin') {
+                    this.loadBaseUsuariosTab();
                 }
             });
         });
@@ -861,6 +864,33 @@ class AdminManager {
         } catch (error) {
             console.error('Error removiendo admin:', error);
             window.authManager?.showMessage('Error: ' + error.message, 'error');
+        }
+    }
+
+    // ============================================
+    // GESTIÓN DE BASE DE INSCRIPTOS
+    // ============================================
+
+    async loadBaseUsuariosTab() {
+        try {
+            console.log('👥 Cargando Base de Inscriptos...');
+            
+            // Inicializar el manager si no existe
+            if (!window.baseInscriptosManager) {
+                console.error('❌ BaseInscriptosManager no está disponible');
+                return;
+            }
+            
+            // Activar el tab
+            await window.baseInscriptosManager.activateTab();
+            
+            // Cargar los datos de la colección base_inscriptos
+            await window.baseInscriptosManager.cargarBaseInscriptos();
+            
+            console.log('✅ Base de inscriptos cargada');
+            
+        } catch (error) {
+            console.error('❌ Error cargando base de inscriptos:', error);
         }
     }
 
@@ -1828,6 +1858,7 @@ class AdminManager {
                     </div>
                 </td>
                 <td>${inscripcion.usuarioEmail}</td>
+                <td>${inscripcion.telefono || 'No disponible'}</td>
                 <td>${inscripcion.cursoNombre}</td>
                 <td>${fechaCurso}</td>
                 <td>${fechaInscripcion}</td>
@@ -2671,6 +2702,33 @@ class AdminManager {
                 fechaActualizacion: new Date(),
                 actualizadoPor: auth.currentUser.email
             });
+
+            // Actualizar base_inscriptos cuando cambie estado de inscripción
+            try {
+                const inscripcion = this.inscripciones.find(i => i.id === inscripcionId);
+                if (inscripcion && window.baseInscriptosManager) {
+                    // Obtener datos del curso
+                    const curso = this.cursos.find(c => c.id === inscripcion.cursoId);
+                    
+                    // Actualizar inscripción con nuevo estado
+                    const inscripcionActualizada = {
+                        ...inscripcion,
+                        estado: newStatus,
+                        fechaActualizacion: new Date()
+                    };
+                    
+                    await window.baseInscriptosManager.actualizarInscripto(
+                        inscripcion.usuarioEmail, 
+                        inscripcionActualizada, 
+                        curso
+                    );
+                    
+                    console.log('✅ Base de inscriptos actualizada');
+                }
+            } catch (baseError) {
+                console.error('⚠️ Error actualizando base_inscriptos:', baseError);
+                // No detener el proceso principal por este error
+            }
 
             // Enviar emails según el nuevo estado
             if (window.emailService) {

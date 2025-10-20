@@ -71,6 +71,13 @@
         <section id="cursos" class="section cursos" style="display: none;">
             <div class="container">
                 <h2 class="section__title">Cursos Disponibles</h2>
+                
+                <!-- Spinner de carga de cursos -->
+                <div id="cursos-loading" class="loading-spinner" style="display: none;">
+                    <div class="spinner"></div>
+                    <p>Cargando cursos...</p>
+                </div>
+                
                 <div id="cursos-grid" class="cursos__grid">
                     <!-- Los cursos se cargarán dinámicamente -->
                 </div>
@@ -119,6 +126,9 @@
                     </button>
                     <button class="tab-btn" data-tab="administradores-admin">
                         <i class="fas fa-users-cog"></i> Administradores
+                    </button>
+                    <button class="tab-btn" data-tab="base-usuarios-admin">
+                        <i class="fas fa-users"></i> Base de Inscriptos
                     </button>
                     <button class="tab-btn" data-tab="notas-admin">
                         <i class="fas fa-sticky-note"></i> Notas
@@ -352,6 +362,9 @@
                                     </th>
                                     <th class="sortable" data-column="email" data-column-id="email">
                                         Email <i class="fas fa-sort"></i>
+                                    </th>
+                                    <th class="sortable" data-column="telefono" data-column-id="telefono">
+                                        Teléfono <i class="fas fa-sort"></i>
                                     </th>
                                     <th class="sortable" data-column="curso" data-column-id="curso">
                                         Curso <i class="fas fa-sort"></i>
@@ -673,6 +686,128 @@
                                 <div class="stat-number" id="recent-logins">0</div>
                                 <div class="stat-label">Accesos Recientes (7d)</div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Base de Datos de Inscriptos -->
+                <div id="base-usuarios-admin" class="tab-content">
+                    <div class="admin__header">
+                        <h3>
+                            <i class="fas fa-users"></i> Base de Datos de Inscriptos
+                        </h3>
+                        <p class="text-muted">Gestión completa de inscriptos y sus historiales de cursos</p>
+                        
+                        <div class="admin__actions">
+                            <button id="refresh-base-usuarios-btn" class="btn btn--primary">
+                                <i class="fas fa-sync-alt"></i> Actualizar
+                            </button>
+                            <button id="consolidar-base-usuarios-btn" class="btn btn--warning">
+                                <i class="fas fa-database"></i> Consolidar Datos
+                            </button>
+                            <button id="export-base-usuarios-btn" class="btn btn--secondary">
+                                <i class="fas fa-download"></i> Exportar CSV
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Estadísticas -->
+                    <div class="admin__section">
+                        <h4><i class="fas fa-chart-bar"></i> Estadísticas</h4>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-number" id="total-usuarios">0</div>
+                                <div class="stat-label">Total Inscriptos</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number" id="usuarios-admins">0</div>
+                                <div class="stat-label">Inscriptos Activos</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number" id="usuarios-verificados">0</div>
+                                <div class="stat-label">Con Cursos Confirmados</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-number" id="usuarios-filtrados">0</div>
+                                <div class="stat-label">Resultados Filtrados</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filtros -->
+                    <div class="admin__section">
+                        <h4><i class="fas fa-filter"></i> Filtros de Búsqueda</h4>
+                        <div class="filters-row">
+                            <div class="form-group">
+                                <label for="filter-email-usuario">Email o Nombre</label>
+                                <input 
+                                    type="text" 
+                                    id="filter-email-usuario" 
+                                    class="form-control" 
+                                    placeholder="Buscar por email o nombre..."
+                                >
+                            </div>
+                            <div class="form-group">
+                                <label for="filter-estado-usuario">Estado</label>
+                                <select id="filter-estado-usuario" class="form-control">
+                                    <option value="">Todos los estados</option>
+                                    <option value="activo">Inscriptos Activos</option>
+                                    <option value="inactivo">Inscriptos Inactivos</option>
+                                    <option value="confirmados">Con Cursos Confirmados</option>
+                                    <option value="pendientes">Con Cursos Pendientes</option>
+                                    <option value="nuevos">Nuevos (1 inscripción)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Loading -->
+                    <div id="base-usuarios-loading" class="loading-container" style="display: none;">
+                        <i class="fas fa-spinner fa-spin fa-2x"></i>
+                        <p>Cargando base de inscriptos...</p>
+                    </div>
+
+                    <!-- Tabla de inscriptos -->
+                    <div class="admin__section">
+                        <h4><i class="fas fa-table"></i> Lista de Inscriptos</h4>
+                        <div class="table-container">
+                            <table id="base-usuarios-table" class="admin-table">
+                                <thead>
+                                    <tr>
+                                        <th data-sort="nombre">
+                                            <i class="fas fa-user"></i> Inscripto
+                                        </th>
+                                        <th data-sort="activo">
+                                            <i class="fas fa-circle"></i> Estado
+                                        </th>
+                                        <th data-sort="telefono">
+                                            <i class="fas fa-phone"></i> Teléfono
+                                        </th>
+                                        <th data-sort="totalInscripciones">
+                                            <i class="fas fa-chart-bar"></i> Estadísticas
+                                        </th>
+                                        <th data-sort="montoTotalInvertido">
+                                            <i class="fas fa-dollar-sign"></i> Montos
+                                        </th>
+                                        <th data-sort="fechaPrimeraInscripcion">
+                                            <i class="fas fa-calendar-plus"></i> Primera Inscripción
+                                        </th>
+                                        <th data-sort="fechaUltimaInscripcion">
+                                            <i class="fas fa-calendar-check"></i> Última Inscripción
+                                        </th>
+                                        <th>
+                                            <i class="fas fa-cogs"></i> Acciones
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody id="base-usuarios-tbody">
+                                    <tr>
+                                        <td colspan="8" style="text-align: center; padding: 40px;">
+                                            <i class="fas fa-info-circle"></i> Haz clic en "Actualizar" para cargar los inscriptos
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
@@ -1183,6 +1318,15 @@
                             <span class="checkmark"></span>
                             <i class="fas fa-envelope"></i>
                             Email
+                        </label>
+                    </div>
+                    
+                    <div class="column-config-item">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="col-telefono" checked>
+                            <span class="checkmark"></span>
+                            <i class="fas fa-phone"></i>
+                            Teléfono
                         </label>
                     </div>
                     
@@ -2005,6 +2149,7 @@
     <script type="module" src="js/recetas.js"></script>
     <script type="module" src="js/notas.js"></script>
     <script type="module" src="js/contabilidad.js"></script>
+    <script type="module" src="js/base-usuarios.js"></script>
     <script type="module" src="js/admin.js"></script>
     <!-- init-configuraciones.js se carga desde app.js para evitar duplicación -->
     <script type="module" src="js/email-diagnostic.js"></script>

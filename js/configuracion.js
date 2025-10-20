@@ -169,20 +169,43 @@ class ConfiguracionManager {
                 await this.waitForFirebase();
             }
 
-            console.log('📋 Cargando todas las configuraciones...');
+            console.log('📋 Cargando configuraciones del sistema...');
             
-            await Promise.all([
+            // Configuraciones básicas que todos los usuarios necesitan
+            const basicConfigurations = [
                 this.loadSedeConfiguration(),
-                this.loadProfesoresConfiguration(),
-                this.loadScriptsConfiguration(),
                 this.loadEnvioConfiguration(),
-                this.loadRecordatoriosConfiguration(),
-                this.loadPlantillasEmail()
-            ]);
+                this.loadRecordatoriosConfiguration()
+            ];
             
-            console.log('✅ Todas las configuraciones cargadas exitosamente');
+            // Cargar configuraciones básicas (críticas para el funcionamiento)
+            await Promise.all(basicConfigurations);
+            console.log('✅ Configuraciones básicas cargadas');
+            
+            // Cargar configuraciones de admin SOLO si el usuario es admin
+            const isUserAdmin = window.authManager && window.authManager.isAdmin;
+            if (isUserAdmin) {
+                console.log('👑 Usuario admin detectado, cargando configuraciones administrativas...');
+                try {
+                    const adminConfigurations = [
+                        this.loadProfesoresConfiguration(),
+                        this.loadScriptsConfiguration(),
+                        this.loadPlantillasEmail()
+                    ];
+                    
+                    await Promise.all(adminConfigurations);
+                    console.log('✅ Configuraciones administrativas cargadas');
+                } catch (adminError) {
+                    console.warn('⚠️ Error en configuraciones administrativas:', adminError);
+                    // No fallar completamente si solo las configs de admin fallan
+                }
+            } else {
+                console.log('👤 Usuario regular detectado, omitiendo configuraciones administrativas');
+            }
+            
+            console.log('✅ Configuraciones del sistema inicializadas correctamente');
         } catch (error) {
-            console.error('❌ Error al cargar configuraciones:', error);
+            console.error('❌ Error crítico al cargar configuraciones básicas:', error);
             this.showError('Error al cargar las configuraciones del sistema: ' + error.message);
         }
     }
@@ -1205,6 +1228,13 @@ class ConfiguracionManager {
      */
     async loadPlantillasEmail() {
         try {
+            // Verificar permisos de admin antes de acceder a datos sensibles
+            if (!window.authManager?.isCurrentUserAdmin()) {
+                console.log('👤 Usuario no-admin: omitiendo carga de plantillas email');
+                this.plantillasEmail = [];
+                return;
+            }
+            
             console.log('📧 Cargando plantillas de email...');
             
             const plantillasRef = collection(db, 'plantillas_email');
@@ -1404,7 +1434,9 @@ class ConfiguracionManager {
 
             // Cerrar modal y recargar
             this.cerrarModalPlantilla();
-            await this.loadPlantillasEmail();
+            if (window.authManager?.isCurrentUserAdmin()) {
+                await this.loadPlantillasEmail();
+            }
 
         } catch (error) {
             console.error('❌ Error guardando plantilla:', error);
@@ -1452,7 +1484,9 @@ class ConfiguracionManager {
             });
 
             this.showSuccess(`Plantilla ${nuevoEstado ? 'activada' : 'desactivada'} correctamente`);
-            await this.loadPlantillasEmail();
+            if (window.authManager?.isCurrentUserAdmin()) {
+                await this.loadPlantillasEmail();
+            }
 
         } catch (error) {
             console.error('❌ Error cambiando estado de plantilla:', error);
@@ -1471,7 +1505,9 @@ class ConfiguracionManager {
         try {
             await deleteDoc(doc(db, 'plantillas_email', plantillaId));
             this.showSuccess('Plantilla eliminada correctamente');
-            await this.loadPlantillasEmail();
+            if (window.authManager?.isCurrentUserAdmin()) {
+                await this.loadPlantillasEmail();
+            }
 
         } catch (error) {
             console.error('❌ Error eliminando plantilla:', error);
